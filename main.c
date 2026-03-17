@@ -51,6 +51,7 @@ void *logging_thread(void *arg)
         return NULL;
     }
 
+    long lastX = X;
     while (1)
     {
         pthread_mutex_lock(&lock);
@@ -62,6 +63,12 @@ void *logging_thread(void *arg)
 
         if (prevT != 0)
             interval = T - prevT;
+
+        if (X != lastX)
+        {
+            fprintf(f, "\n");
+            lastX = X;
+        }
 
         fprintf(f, "%lld %lld\n", T, interval);
         fflush(f);
