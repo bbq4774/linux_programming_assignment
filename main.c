@@ -4,19 +4,25 @@
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
-#define SIZE_BLOCK 5000  
-#define MAX_SIZE_SAMPLE 500000L
+#define SIZE_BLOCK 50000 
+#define MAX_SIZE_SAMPLE 500000L 
 
 typedef struct {
     long long t;
     long long interval;
 } Record;
 
-/* --- Shared Buffer --- */
-Record shared_buffer[SIZE_BLOCK];
-int shared_count = 0;
+/* --- Double Buffer --- */
+Record buffer1[SIZE_BLOCK];
+Record buffer2[SIZE_BLOCK];
+Record *active_buffer = buffer1;
+Record *full_buffer = NULL;
+
+int active_idx = 0;
 long global_X = 1000000;
+long long total_collected = 0;
 int flag_x_changed = 0;
 int flag_newline = 0;
 
@@ -25,12 +31,12 @@ pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 /* ================= SAMPLE THREAD ================= */
 void *sample_thread(void *arg) {
-    Record local_buffer[SIZE_BLOCK];
-    int local_idx = 0;
     long long prev_time = 0;
-    long long total_collected = 0;
-    long long time_now = 0;
-    long current_x = 0;
+    long current_x;
+    long long current_total;
+    long long time_now;
+
+    struct timespec actual_ts;
 
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -40,12 +46,12 @@ void *sample_thread(void *arg) {
         {
             // Reset variables
             total_collected = 0;
-            flag_x_changed = 0;
-            flag_newline = 1; 
             prev_time = 0;
+            flag_x_changed = 0;
+            flag_newline = 1;
         }
-        // Get current X
         current_x = global_X;
+        current_total = total_collected;
         pthread_mutex_unlock(&lock);
 
         ts.tv_nsec += current_x;
@@ -56,38 +62,34 @@ void *sample_thread(void *arg) {
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
 
-        struct timespec actual_ts;
-        clock_gettime(CLOCK_MONOTONIC, &actual_ts);
-
         // Check if not exceeded max sample size
-        if (total_collected < MAX_SIZE_SAMPLE) {
+        if (current_total < MAX_SIZE_SAMPLE) {
+            clock_gettime(CLOCK_MONOTONIC, &actual_ts);
             time_now = (long long)actual_ts.tv_sec * 1000000000LL + actual_ts.tv_nsec;
-            
-            local_buffer[local_idx].t = time_now;
-            local_buffer[local_idx].interval = (prev_time == 0) ? current_x : (time_now - prev_time);
-            prev_time = time_now;
-            
-            local_idx++;
-            total_collected++;
 
-            // Update shared buffer
-            if (local_idx >= SIZE_BLOCK || total_collected >= MAX_SIZE_SAMPLE) 
-            {
+            active_buffer[active_idx].t = time_now;
+            active_buffer[active_idx].interval = (prev_time == 0) ? current_x : (time_now - prev_time);
+            prev_time = time_now;
+            active_idx++;
+
+            // Update buffer
+            if (active_idx >= SIZE_BLOCK || (current_total + active_idx) >= MAX_SIZE_SAMPLE) {
                 pthread_mutex_lock(&lock);
-                while (shared_count > 0) 
-                {
+                while (full_buffer != NULL) {
                     pthread_cond_wait(&cond, &lock);
                 }
                 
-                memcpy(shared_buffer, local_buffer, sizeof(Record) * local_idx);
-                shared_count = local_idx;
-                
+                full_buffer = active_buffer;
+                active_buffer = (active_buffer == buffer1) ? buffer2 : buffer1;
+                total_collected += active_idx;
+                active_idx = 0;
+
                 pthread_cond_signal(&cond);
                 pthread_mutex_unlock(&lock);
-                local_idx = 0; // Reset index
             }
         }
     }
+    return NULL;
 }
 
 /* ================= LOGGING THREAD ================= */
@@ -99,37 +101,32 @@ void *logging_thread(void *arg)
         printf("Cannot open file");
         return NULL;
     }
-
-    Record buffer[SIZE_BLOCK];
     
     while (1) 
     {
         pthread_mutex_lock(&lock);
-        while (shared_count == 0) 
+        while (full_buffer == NULL) 
         {
             pthread_cond_wait(&cond, &lock);
         }
-        
+
         if (flag_newline) 
         {
             fprintf(f, "\n");
             flag_newline = 0;
         }
 
-        // Take data from shared buffer
-        int count = shared_count;
-        memcpy(buffer, shared_buffer, sizeof(Record) * count);
-        shared_count = 0;
+        Record *buffer_to_write = full_buffer;
+        full_buffer = NULL;
         
         pthread_cond_signal(&cond);
         pthread_mutex_unlock(&lock);
 
-        // Write to file
-        for (int i = 0; i < count; i++) 
+        for (int i = 0; i < SIZE_BLOCK; i++) 
         {
-            fprintf(f, "%lld %lld\n", buffer[i].t, buffer[i].interval);
+            fprintf(f, "%lld %lld\n", buffer_to_write[i].t, buffer_to_write[i].interval);
         }
-        fflush(f); 
+        fflush(f);
     }
     fclose(f);
     return NULL;
