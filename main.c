@@ -21,9 +21,10 @@ void *sample_thread(void *arg)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     next_sample_time = ts.tv_sec * 1000000000LL + ts.tv_nsec;
 
+    long long now;
+    long long currentX;
     while (1)
     {
-        long long now;
         do {
             clock_gettime(CLOCK_MONOTONIC, &ts);
             now = ts.tv_sec * 1000000000LL + ts.tv_nsec;
@@ -32,7 +33,7 @@ void *sample_thread(void *arg)
         pthread_mutex_lock(&lock);
         
         T = now;
-        long long currentX = X;
+        currentX = X;
         
         pthread_cond_signal(&cond);
         pthread_mutex_unlock(&lock);
