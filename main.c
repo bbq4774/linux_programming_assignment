@@ -25,9 +25,6 @@ pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 /* ================= SAMPLE THREAD ================= */
 void *sample_thread(void *arg) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
     Record local_buffer[SIZE_BLOCK];
     int local_idx = 0;
     long long prev_time = 0;
@@ -35,6 +32,8 @@ void *sample_thread(void *arg) {
     long long time_now = 0;
     long current_x = 0;
 
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     while (1) {
         pthread_mutex_lock(&lock);
         if (flag_x_changed) 
@@ -57,9 +56,12 @@ void *sample_thread(void *arg) {
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
 
+        struct timespec actual_ts;
+        clock_gettime(CLOCK_MONOTONIC, &actual_ts);
+
         // Check if not exceeded max sample size
         if (total_collected < MAX_SIZE_SAMPLE) {
-            time_now = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            time_now = (long long)actual_ts.tv_sec * 1000000000LL + actual_ts.tv_nsec;
             
             local_buffer[local_idx].t = time_now;
             local_buffer[local_idx].interval = (prev_time == 0) ? current_x : (time_now - prev_time);
