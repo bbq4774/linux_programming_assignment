@@ -42,43 +42,84 @@ void *sample_thread(void *arg)
     }
 }
 
-/* ================= LOGGING THREAD (OPTIMIZED) ================= */
+/* ================= LOGGING THREAD ================= */
+#define MAX_SAMPLES_PER_X 500000L 
+#define BUFFER_SIZE 10000L
+
+typedef struct {
+    long long t;
+    long long interval;
+} Record;
+
 void *logging_thread(void *arg)
 {
     FILE *f = fopen("time_and_interval.txt", "w");
-    if (f == NULL) {
-        printf("Cannot open file\n");
+    if (f == NULL) 
+    {
+        printf("Cannot open file");
         return NULL;
     }
 
+    Record buffer[BUFFER_SIZE];
+    int buf_idx = 0;
+    long long samples_collected = 0;
     long lastX = X;
-    long long local_T, local_prevT, local_interval;
+    
+    long long local_T, local_prevT;
     long local_X;
 
     while (1)
     {
         pthread_mutex_lock(&lock);
-
         while (T == prevT)
             pthread_cond_wait(&cond, &lock);
 
         local_T = T;
         local_prevT = prevT;
         local_X = X;
-        
         prevT = T; 
-        
         pthread_mutex_unlock(&lock); 
 
-        local_interval = (local_prevT == 0) ? 0 : (local_T - local_prevT);
-
-        if (local_X != lastX) {
+        // Check if X has changed
+        if (local_X != lastX) 
+        {
+            for (int i = 0; i < buf_idx; i++) 
+            {
+                fprintf(f, "%lld %lld\n", buffer[i].t, buffer[i].interval);
+            }
             fprintf(f, "\n");
+            
+            // Reset
+            buf_idx = 0;
+            samples_collected = 0;
             lastX = local_X;
+            fflush(f);
         }
 
-        fprintf(f, "%lld %lld\n", local_T, local_interval);
+        if (samples_collected < MAX_SAMPLES_PER_X) 
+        {
+            long long interval = (local_prevT == 0) ? 0 : (local_T - local_prevT);
+            
+            // Save to buffer
+            buffer[buf_idx].t = local_T;
+            buffer[buf_idx].interval = interval;
+            buf_idx++;
+            samples_collected++;
+
+            // Flush buffer to file if full
+            if (buf_idx >= BUFFER_SIZE) 
+            {
+                for (int i = 0; i < BUFFER_SIZE; i++) 
+                {
+                    fprintf(f, "%lld %lld\n", buffer[i].t, buffer[i].interval);
+                }
+                buf_idx = 0;
+            }
+        }
     }
+    
+    fclose(f);
+    return NULL;
 }
 
 /* ================= INPUT THREAD ================= */
