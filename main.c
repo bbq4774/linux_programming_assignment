@@ -15,43 +15,45 @@ pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 /* ================= SAMPLE THREAD ================= */
 void *sample_thread(void *arg)
 {
-    struct timespec time;
-    struct timespec sleep_time;
+    struct timespec ts;
+    long long next_sample_time;
+    
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    next_sample_time = ts.tv_sec * 1000000000LL + ts.tv_nsec;
 
     while (1)
     {
-        clock_gettime(CLOCK_MONOTONIC, &time);
-
-        long long time_ns = time.tv_sec * 1000000000LL + time.tv_nsec;
+        long long now;
+        do {
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            now = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        } while (now < next_sample_time); 
 
         pthread_mutex_lock(&lock);
-
-        T = time_ns;
+        
+        T = now;
+        long long currentX = X;
+        
         pthread_cond_signal(&cond);
-
-        long currentX = X;
-
         pthread_mutex_unlock(&lock);
 
-        sleep_time.tv_sec = currentX / 1000000000;
-        sleep_time.tv_nsec = currentX % 1000000000;
-
-        nanosleep(&sleep_time, NULL);
+        next_sample_time += currentX; 
     }
 }
 
-/* ================= LOGGING THREAD ================= */
+/* ================= LOGGING THREAD (OPTIMIZED) ================= */
 void *logging_thread(void *arg)
 {
     FILE *f = fopen("time_and_interval.txt", "w");
-
-    if (f == NULL)
-    {
+    if (f == NULL) {
         printf("Cannot open file\n");
         return NULL;
     }
 
     long lastX = X;
+    long long local_T, local_prevT, local_interval;
+    long local_X;
+
     while (1)
     {
         pthread_mutex_lock(&lock);
@@ -59,23 +61,22 @@ void *logging_thread(void *arg)
         while (T == prevT)
             pthread_cond_wait(&cond, &lock);
 
-        long long interval = 0;
+        local_T = T;
+        local_prevT = prevT;
+        local_X = X;
+        
+        prevT = T; 
+        
+        pthread_mutex_unlock(&lock); 
 
-        if (prevT != 0)
-            interval = T - prevT;
+        local_interval = (local_prevT == 0) ? 0 : (local_T - local_prevT);
 
-        if (X != lastX)
-        {
+        if (local_X != lastX) {
             fprintf(f, "\n");
-            lastX = X;
+            lastX = local_X;
         }
 
-        fprintf(f, "%lld %lld\n", T, interval);
-        fflush(f);
-
-        prevT = T;
-
-        pthread_mutex_unlock(&lock);
+        fprintf(f, "%lld %lld\n", local_T, local_interval);
     }
 }
 
@@ -92,21 +93,21 @@ void *input_thread(void *arg)
         {
             if (fscanf(f, "%ld", &newX) == 1)
             {
-                pthread_mutex_lock(&lock);
-
                 if (newX != X)
                 {
                     printf("Update X = %ld ns\n", newX);
+                    
+                    pthread_mutex_lock(&lock);
+
                     X = newX;
+                    
+                    pthread_mutex_unlock(&lock);
                 }
-
-                pthread_mutex_unlock(&lock);
+                
             }
-
             fclose(f);
         }
-
-        sleep(1);
+        sleep(5);
     }
 }
 
